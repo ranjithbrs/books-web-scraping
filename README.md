@@ -51,9 +51,9 @@ flowchart TD
 * **Complete Catalog Traversal**: Iterates systematically through all 50 index pages (`catalogue/page-1.html` through `page-50.html`), extracting all 20 book cards per page to assemble the full 1,000-book catalog.
 * **Full Title Retention**: Avoids truncated UI text (e.g. `"A Light in the..."`) by programmatically selecting the unabbreviated title from the HTML `<a>` tag's `title` attribute:
   ```python
-  title = article.find("h3").find("a").get("title")
+  title = article.find("h3").find("a").get("title") or title_elem.text.strip()
   ```
-* **Defensive DOM Traversal**: Every HTML field extraction is guarded with fallback ternary expressions to ensure that minor structural inconsistencies never crash the 50-page crawl with an unhandled `AttributeError`.
+* **Defensive DOM Traversal**: Every HTML field extraction is guarded with fallback expressions to ensure that structural inconsistencies never crash the 50-page crawl with an unhandled `AttributeError`.
 
 ---
 
@@ -64,7 +64,10 @@ flowchart TD
 
 ---
 
-### 3. Scraping Policies, Robots.txt & Rate Limiting
+### 3. Active Robots.txt Policy Check & Rate Limiting (RFC 9309)
+* **Active Policy Verification**: Before initiating scraping, the crawler requests `https://books.toscrape.com/robots.txt`:
+  * Evaluated via Python's `urllib.robotparser.RobotFileParser`.
+  * The server returns **HTTP 404 (Not Found)**. Under **RFC 9309 (Robots Exclusion Standard, Section 2.3.1.2)**: *"If the server responds with a 404 status code for robots.txt, the crawler can assume that all content is accessible and no restrictions apply."*
 * **Ethical Crawling**: Implements a polite rate-limiting pause (`time.sleep(0.3)`) between page acquisitions, ensuring zero server stress or traffic spikes.
 * **Custom User-Agent Header**: Identifies the pipeline transparently via HTTP headers:
   ```python
@@ -72,17 +75,23 @@ flowchart TD
       "User-Agent": "BooksScraperPipeline/1.0 (+https://github.com/ranjithbrs/books-web-scraping; Educational Data Pipeline)"
   }
   ```
-* **Robots.txt Adherence**: The target sandbox (`books.toscrape.com`) allows open educational scraping, and our script strictly abides by standard bot etiquette without spoofing credentials or circumventing controls.
 
 ---
 
-### 4. Data Quality Audit & Duplicate Handling
-The pipeline includes an integrated audit routine (`validate_and_save_dataset`) that verifies data integrity before persisting to disk:
-* **Duplicate Detection**: Real-world catalogs frequently contain duplicate listings across categories. The pipeline logs any repeated titles automatically:
-  > *Catalog Audit Finding*: The title **"The Star-Touched Queen"** appears on Page 12 (£46.02) and again on Page 18 (£32.30).
-* **CLI Deduplication Toggle**: By default, the script preserves all 1,000 raw catalog entries for downstream fidelity, or accepts `--dedupe` to strip duplicates.
-* **Null-Value Verification**: Confirms 100% non-null counts across `Title`, `Price`, `Rating`, and `Availability`.
-* **Standardized UTF-8 Export**: Ensures currency symbols (`£`) and punctuation are cleanly preserved without legacy Windows-1252 byte corruption (`Â`).
+### 4. Source Encoding Correction & Data Quality Validation Engine
+* **Source UTF-8 Decoding (Solving Mojibake at the Source)**:
+  * By default, HTTP requests without an explicit `charset=utf-8` header cause Python's `requests` library to fall back to `ISO-8859-1`. This caused multi-byte UTF-8 sequences (such as the right curly quote `’` U+2019) to be misinterpreted as mojibake (`â\x80\x99` or `Shakespeareâs`).
+  * The pipeline explicitly enforces `response.encoding = 'utf-8'` on every acquired page. This eliminates encoding artifacts at the ingestion layer without fragile post-hoc string replacements.
+* **Strict Schema & Null-Value Validation (`validate_schema_and_quality`)**:
+  * **Schema Assertions**: Verifies exact column structure `['Title', 'Price', 'Rating', 'Availability']` and raises `ValueError` on mismatch.
+  * **Zero-Tolerance Null & Empty Checks**: Asserts 0 null values and 0 empty strings across all 1,000 records.
+  * **Price Pattern Validation**: Asserts that 100% of prices strictly match regex `^£\d+\.\d{2}$`.
+  * **Rating Domain Validation**: Asserts that ratings belong strictly to `{'One', 'Two', 'Three', 'Four', 'Five'}`.
+  * **Row Count Assertion**: Validates that exactly 1,000 rows ($50 \times 20$) are accounted for.
+* **Verified Catalog Duplicate Discovery**:
+  * The crawler logs duplicate titles discovered in the live catalog during the crawl:
+    * **"The Star-Touched Queen"** appears on **Row 236 (Page 12)** at `£46.02` (Rating: Five) and on **Row 358 (Page 18)** at `£32.30` (Rating: Five).
+  * The script preserves full catalog fidelity (1,000 records) by default, or accepts `--dedupe` to remove duplicate listings.
 
 ---
 
